@@ -1,0 +1,45 @@
+# config.py
+import os
+import json
+
+DEFAULT_CONFIG = {
+    "autostart": False,
+    "opacity": 1.0,  # Прозрачность от 0.0 до 1.0
+    "language": "ru"  # "ru" или "en"
+}
+
+def load_config():
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r") as f:
+                data = f.read().strip()
+                if not data:  # Если файл пустой
+                    return DEFAULT_CONFIG
+                return json.loads(data)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Ошибка загрузки config.json: {e}. Используются настройки по умолчанию.")
+            return DEFAULT_CONFIG
+    return DEFAULT_CONFIG
+
+def save_config(config):
+    with open("config.json", "w") as f:
+        json.dump(config, f)
+
+def set_autostart(enable):
+    import winreg
+    key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    app_name = "LolzteamMonitor"
+    exe_path = os.path.abspath(__file__).replace("config.py", "ui.py")  # Путь к ui.py
+
+    try:
+        reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_ALL_ACCESS)
+        if enable:
+            winreg.SetValueEx(reg_key, app_name, 0, winreg.REG_SZ, f'"{exe_path}"')
+        else:
+            try:
+                winreg.DeleteValue(reg_key, app_name)
+            except FileNotFoundError:
+                pass  # Если значение уже удалено, ничего не делаем
+        winreg.CloseKey(reg_key)
+    except Exception as e:
+        print(f"Ошибка настройки автозапуска: {e}")
