@@ -1,0 +1,176 @@
+import time
+import requests
+import logging
+from datetime import datetime, timedelta
+import json
+import os
+import threading
+
+# Настройки
+DEFAULT_SECTION_ID = 22  # ID раздела "Оффтопик" (уточните актуальный ID)
+BASE_URL = "https://api.lolz.guru"  # Базовый URL API (уточните в документации)
+LOG_FILE = "monitor.log"  # Файл для логов
+CACHE_FILE = "last_post_cache.json"  # Файл для кэширования последнего ID
+USERNAME_FIELDS = ["username", "author", "user"]  # Возможные поля имени пользователя в API
+
+# Настройка логирования
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    encoding="utf-8"
+)
+
+
+# Функция отправки сообщения в Telegram
+def send_telegram_message(message, telegram_token, chat_id):
+    try:
+        url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        requests.post(url, json=payload)
+        logging.info(f"Сообщение отправлено в Telegram: {message}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Ошибка отправки в Telegram: {e}")
+
+
+# Функция получения ID раздела из ссылки
+def get_section_id_from_url(url):
+    try:
+        section_id = int(url.split('/forums/')[1].strip('/'))
+        return section_id
+    except (IndexError, ValueError):
+        return DEFAULT_SECTION_ID
+
+
+# Функция загрузки последнего ID из кэша
+def load_last_post_id(section_id):
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            cache = json.load(f)
+            return cache.get(str(section_id), 0)
+    return 0
+
+
+# Функция сохранения последнего ID в кэш
+def save_last_post_id(section_id, post_id):
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            cache = json.load(f)
+    cache[str(section_id)] = post_id
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f)
+
+
+# Функция проверки постов в разделе через API
+def check_posts(section_id, token, keywords=None, usernames=None, last_post_id=0, time_filter_hours=None):
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        url = f"{BASE_URL}/forum/posts?section_id={section_id}&limit=20"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        posts = response.json().get("posts", [])
+
+        new_posts = []
+        cutoff_time = datetime.now() - timedelta(hours=time_filter_hours) if time_filter_hours else None
+        usernames = [u.strip().lower() for u in usernames.split(",")] if usernames else None
+
+        for post in posts:
+            post_id = int(post["post_id"])
+            thread_id = post["thread_id"]
+            content = post["content"].lower()
+            title = post.get("thread_title", "").lower()
+            post_username = None
+            for field in USERNAME_FIELDS:
+                if field in post:
+                    post_username = post[field].lower()
+                    break
+            if not post_username:
+                post_username = "unknown"
+
+            try:
+                post_time = datetime.strptime(post.get("date", datetime.now().isoformat()), "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                post_time = datetime.now()
+
+            if post_id <= last_post_id:
+                continue
+
+            if cutoff_time and post_time < cutoff_time:
+                continue
+
+            should_add = False
+            if usernames and post_username in usernames:
+                should_add = True
+            elif keywords:
+                for keyword in keywords:
+                    if keyword.lower() in content or keyword.lower() in title:
+                        should_add = True
+                        break
+
+            if should_add:
+                new_posts.append({
+                    "post_id": post_id,
+                    "title": title,
+                    "content": content[:100],
+                    "username": post_username,
+                    "link": f"https://lolz.guru/threads/{thread_id}/post-{post_id}"
+                })
+
+        max_post_id = max(int(post["post_id"]) for post in posts) if posts else last_post_id
+        save_last_post_id(section_id, max_post_id)
+        return new_posts, max_post_id
+    except Exception as e:
+        logging.error(f"Ошибка при проверке постов: {e}")
+        return [], last_post_id
+
+
+# Основная логика мониторинга
+def monitor(section_urls, token, telegram_token, chat_id, keywords=None, usernames=None, stop_event=None,
+            time_filter_hours=24):
+    if not section_urls:
+        section_ids = [DEFAULT_SECTION_ID]
+    else:
+        section_ids = [get_section_id_from_url(url) for url in section_urls.split(",")]
+
+    keywords = [kw.strip() for kw in keywords.split(",") if keywords and kw.strip()] if keywords else None
+    last_post_ids = {sid: load_last_post_id(sid) for sid in section_ids}
+
+    log_msg = f"Мониторинг запущен для разделов: {section_ids}"
+    if keywords:
+        log_msg += f" с ключевыми словами: {keywords}"
+    if usernames:
+        log_msg += f" для пользователей: {usernames}"
+    logging.info(log_msg)
+    print(log_msg)
+
+    while stop_event is None or not stop_event.is_set():
+        for section_id in section_ids:
+            new_posts, new_last_post_id = check_posts(section_id, token, keywords, usernames, last_post_ids[section_id],
+                                                      time_filter_hours)
+
+            if new_posts:
+                for post in new_posts:
+                    message = (
+                        f"🔍 Новый пост от {post['username']}!\n"
+                        f"Заголовок: {post['title']}\n"
+                        f"Содержание: {post['content']}\n"
+                        f"Ссылка: {post['link']}"
+                    )
+                    send_telegram_message(message, telegram_token, chat_id)
+                    logging.info(f"Найден пост: {post['title']} в разделе {section_id}")
+                    print(f"Отправлено уведомление: {post['title']}")
+
+            last_post_ids[section_id] = new_last_post_id
+
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    stop_event = threading.Event()
+    monitor("https://lolz.guru/forums/22/", "your_lolzteam_token", "your_telegram_bot_token", "your_chat_id",
+            usernames="user1,user2", stop_event=stop_event)
