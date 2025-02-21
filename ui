@@ -5,6 +5,7 @@ import os
 import json
 from still import monitor, send_telegram_message, check_posts, get_section_id_from_url, load_last_post_id, DEFAULT_SECTION_ID
 from config import load_config, save_config, set_autostart, load_full_settings
+from telegram import TelegramSettings
 
 class LolzteamMonitorUI:
     def __init__(self, root):
@@ -16,7 +17,6 @@ class LolzteamMonitorUI:
         self.monitor_thread = None
         self.stop_event = threading.Event()
         self.found_posts = []
-        self.settings_visible = False
         self.config_visible = False
 
         # Загрузка настроек из config.py
@@ -113,21 +113,22 @@ class LolzteamMonitorUI:
                                         command=self.toggle_config, bg="#2F3136", fg="#7289DA",
                                         font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=5,
                                         activebackground="#36393F", cursor="hand2")
-        self.settings_button.pack(side="left", padx=(10, 0))  # Уменьшен отступ слева
+        self.settings_button.pack(side="left", padx=(10, 0))
 
         # Заголовок в центре
         self.title_label = tk.Label(self.top_frame, text=self.texts[self.lang]["title"], bg="#1E2124", fg="#7289DA",
                                    font=("Segoe UI", 16, "bold"))
         self.title_label.pack(side="left", expand=True)
 
-        # Контейнер для кнопки настроек Telegram
-        self.toggle_frame = tk.Frame(self.top_frame, bg="#1E2124")
-        self.toggle_frame.pack(side="right")
-        self.toggle_button = tk.Button(self.toggle_frame, text=self.texts[self.lang]["telegram_settings"],
-                                     command=self.toggle_settings, bg="#2F3136", fg="#7289DA",
-                                     font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=5,
-                                     activebackground="#36393F", cursor="hand2")
-        self.toggle_button.pack(side="right", padx=(0, 5))
+        # Кнопка Telegram на том же уровне
+        self.telegram_button = tk.Button(self.top_frame, text=self.texts[self.lang]["telegram_settings"],
+                                        command=self.toggle_telegram, bg="#2F3136", fg="#7289DA",
+                                        font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=5,
+                                        activebackground="#36393F", cursor="hand2")
+        self.telegram_button.pack(side="right", padx=(0, 5))
+
+        # Telegram настройки
+        self.telegram = TelegramSettings(self.main_frame, self)
 
         # Блок настроек (встроенный)
         self.config_frame = tk.Frame(self.main_frame, bg="#2F3136", bd=0)
@@ -153,13 +154,6 @@ class LolzteamMonitorUI:
         self.lang_menu["menu"].config(bg="#36393F", fg="#DCDDDE", font=("Segoe UI", 11),
                                      activebackground="#5865F2", activeforeground="#FFFFFF")
         self.update_lang_menu()
-
-        # Сворачиваемый блок настроек Telegram
-        self.settings_frame = tk.Frame(self.main_frame, bg="#2F3136", bd=0)
-        self.token_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["token_label"], **label_style)
-        self.token_entry = tk.Entry(self.settings_frame, width=50, **entry_style)
-        self.chat_id_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["chat_id_label"], **label_style)
-        self.chat_id_entry = tk.Entry(self.settings_frame, width=50, **entry_style)
 
         # Основные настройки мониторинга
         self.monitor_frame = tk.Frame(self.main_frame, bg="#1E2124")
@@ -227,35 +221,16 @@ class LolzteamMonitorUI:
         icon.image = photo
         self.root.iconphoto(True, photo)
 
-    def toggle_settings(self):
-        self.settings_visible = not self.settings_visible
-        if self.config_visible:
-            self.toggle_config()
-        self.apply_settings_visibility()
-
     def toggle_config(self):
         self.config_visible = not self.config_visible
-        if self.settings_visible:
-            self.toggle_settings()
+        if self.telegram.visible:
+            self.telegram.toggle_settings()
         self.apply_config_visibility()
 
-    def apply_settings_visibility(self):
-        self.root.update_idletasks()
-        if self.settings_visible:
-            self.settings_frame.pack(fill="x", pady=(5, 10), padx=10, before=self.monitor_frame)
-            self.token_label.pack(anchor="w", pady=(5, 2), padx=10)
-            self.token_entry.pack(pady=(0, 5), padx=10, fill="x")
-            self.chat_id_label.pack(anchor="w", pady=(5, 2), padx=10)
-            self.chat_id_entry.pack(pady=(0, 5), padx=10, fill="x")
-            self.toggle_button.config(text=self.texts[self.lang]["hide_telegram"], fg="#FF5555")
-            self.root.geometry(f"{self.base_width}x{self.expanded_height}")
-        else:
-            for widget in self.settings_frame.winfo_children():
-                widget.pack_forget()
-            self.settings_frame.pack_forget()
-            self.toggle_button.config(text=self.texts[self.lang]["telegram_settings"], fg="#7289DA")
-            if not self.config_visible:
-                self.root.geometry(f"{self.base_width}x{self.base_height}")
+    def toggle_telegram(self):
+        self.telegram.toggle_settings()
+        if self.config_visible:
+            self.toggle_config()
 
     def apply_config_visibility(self):
         self.root.update_idletasks()
@@ -273,7 +248,7 @@ class LolzteamMonitorUI:
                 widget.pack_forget()
             self.config_frame.pack_forget()
             self.settings_button.config(text=self.texts[self.lang]["settings"], fg="#7289DA")
-            if not self.settings_visible:
+            if not self.telegram.visible:
                 self.root.geometry(f"{self.base_width}x{self.base_height}")
 
     def update_autostart(self):
@@ -287,13 +262,14 @@ class LolzteamMonitorUI:
         save_config(self.config)
 
     def update_language(self, value):
-        if value != self.lang:  # Проверяем, изменился ли язык
+        if value != self.lang:
             self.config["language"] = value
             self.lang = value
-            self.lang_var.set(value)  # Обновляем значение переменной
+            self.lang_var.set(value)
             save_config(self.config)
             self.update_texts()
-            self.update_lang_menu()  # Обновляем меню после смены языка
+            self.update_lang_menu()
+            self.telegram.update_texts(self.lang, self.texts)
 
     def update_lang_menu(self):
         self.lang_menu["menu"].delete(0, "end")
@@ -304,10 +280,8 @@ class LolzteamMonitorUI:
         self.root.title(self.texts[self.lang]["title"])
         self.settings_button.config(text=self.texts[self.lang]["settings"] if not self.config_visible
                                    else "✕ Закрыть" if self.lang == "ru" else "✕ Close")
-        self.toggle_button.config(text=self.texts[self.lang]["telegram_settings"] if not self.settings_visible
-                                 else self.texts[self.lang]["hide_telegram"])
-        self.token_label.config(text=self.texts[self.lang]["token_label"])
-        self.chat_id_label.config(text=self.texts[self.lang]["chat_id_label"])
+        self.telegram_button.config(text=self.texts[self.lang]["telegram_settings"] if not self.telegram.visible
+                                   else self.texts[self.lang]["hide_telegram"])
         self.section_label.config(text=self.texts[self.lang]["section_label"])
         self.keywords_label.config(text=self.texts[self.lang]["keywords_label"])
         self.username_label.config(text=self.texts[self.lang]["username_label"])
@@ -334,7 +308,7 @@ class LolzteamMonitorUI:
         self.root.after(300, self.animate_status)
 
     def start_monitoring(self):
-        if not self.token_entry.get().strip() or not self.chat_id_entry.get().strip():
+        if not self.telegram.get_token().strip() or not self.telegram.get_chat_id().strip():
             messagebox.showerror("Ошибка" if self.lang == "ru" else "Error!",
                                 self.texts[self.lang]["error_telegram"])
             return
@@ -351,7 +325,7 @@ class LolzteamMonitorUI:
         self.stop_event.clear()
         self.monitor_thread = threading.Thread(
             target=monitor,
-            args=(self.section_entry.get(), TOKEN, self.token_entry.get(), self.chat_id_entry.get(),
+            args=(self.section_entry.get(), TOKEN, self.telegram.get_token(), self.telegram.get_chat_id(),
                   self.keywords_entry.get(), self.username_entry.get(), self.stop_event, 24),
             daemon=True
         )
@@ -403,13 +377,12 @@ class LolzteamMonitorUI:
             "section_urls": self.section_entry.get(),
             "keywords": self.keywords_entry.get(),
             "usernames": self.username_entry.get(),
-            "telegram_token": self.token_entry.get(),
-            "chat_id": self.chat_id_entry.get(),
-            "settings_visible": self.settings_visible
         }
+        telegram_settings = self.telegram.save_settings()
         full_settings = load_full_settings()
         full_settings.update(self.config)
         full_settings.update(ui_settings)
+        full_settings.update(telegram_settings)
         try:
             with open("settings.json", "w") as f:
                 json.dump(full_settings, f)
@@ -421,19 +394,12 @@ class LolzteamMonitorUI:
         self.settings = {
             "section_urls": full_settings.get("section_urls", ""),
             "keywords": full_settings.get("keywords", ""),
-            "usernames": full_settings.get("usernames", ""),
-            "telegram_token": full_settings.get("telegram_token", ""),
-            "chat_id": full_settings.get("chat_id", ""),
-            "settings_visible": full_settings.get("settings_visible", False)
+            "usernames": full_settings.get("usernames", "")
         }
         self.section_entry.insert(0, self.settings["section_urls"])
         self.keywords_entry.insert(0, self.settings["keywords"])
         self.username_entry.insert(0, self.settings["usernames"])
-        self.token_entry.insert(0, self.settings["telegram_token"])
-        self.chat_id_entry.insert(0, self.settings["chat_id"])
-        self.settings_visible = self.settings["settings_visible"]
-        self.apply_settings_visibility()
-        return self.settings
+        self.telegram.load_settings()
 
     def run(self):
         self.root.mainloop()
