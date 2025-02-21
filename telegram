@@ -1,0 +1,83 @@
+# telegram.py
+import tkinter as tk
+import json
+from config import load_full_settings
+
+class TelegramSettings:
+    def __init__(self, parent_frame, ui_instance):
+        self.parent_frame = parent_frame
+        self.ui_instance = ui_instance  # Ссылка на экземпляр LolzteamMonitorUI
+        self.lang = ui_instance.lang
+        self.texts = ui_instance.texts
+        self.save_callback = ui_instance.save_ui_settings
+        self.visible = False
+
+        # Стили
+        self.label_style = {"bg": "#1E2124", "fg": "#DCDDDE", "font": ("Segoe UI", 11)}
+        self.entry_style = {"bg": "#36393F", "fg": "#DCDDDE", "insertbackground": "#FFFFFF", "font": ("Segoe UI", 11),
+                           "bd": 0, "relief": "flat", "show": "*"}
+
+        # Блок настроек Telegram (без кнопки)
+        self.settings_frame = tk.Frame(self.parent_frame, bg="#2F3136", bd=0)
+        self.token_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["token_label"], **self.label_style)
+        self.token_entry = tk.Entry(self.settings_frame, width=50, **self.entry_style)
+        self.chat_id_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["chat_id_label"], **self.label_style)
+        self.chat_id_entry = tk.Entry(self.settings_frame, width=50, **self.entry_style)
+
+    def toggle_settings(self):
+        self.visible = not self.visible
+        self.apply_settings_visibility()
+
+    def apply_settings_visibility(self):
+        if self.visible:
+            self.settings_frame.pack(fill="x", pady=(5, 10), padx=10, before=self.parent_frame.winfo_children()[-1])
+            self.token_label.pack(anchor="w", pady=(5, 2), padx=10)
+            self.token_entry.pack(pady=(0, 5), padx=10, fill="x")
+            self.chat_id_label.pack(anchor="w", pady=(5, 2), padx=10)
+            self.chat_id_entry.pack(pady=(0, 5), padx=10, fill="x")
+            self.ui_instance.telegram_button.config(text=self.texts[self.lang]["hide_telegram"], fg="#FF5555")
+            self.ui_instance.root.geometry(f"{self.ui_instance.base_width}x{self.ui_instance.expanded_height}")
+        else:
+            for widget in self.settings_frame.winfo_children():
+                widget.pack_forget()
+            self.settings_frame.pack_forget()
+            self.ui_instance.telegram_button.config(text=self.texts[self.lang]["telegram_settings"], fg="#7289DA")
+            if not self.ui_instance.config_visible:
+                self.ui_instance.root.geometry(f"{self.ui_instance.base_width}x{self.ui_instance.base_height}")
+
+    def update_texts(self, lang, texts):
+        self.lang = lang
+        self.texts = texts
+        self.ui_instance.telegram_button.config(text=self.texts[self.lang]["telegram_settings"] if not self.visible
+                                               else self.texts[self.lang]["hide_telegram"])
+        self.token_label.config(text=self.texts[self.lang]["token_label"])
+        self.chat_id_label.config(text=self.texts[self.lang]["chat_id_label"])
+
+    def load_settings(self):
+        full_settings = load_full_settings()
+        self.settings = {
+            "telegram_token": full_settings.get("telegram_token", ""),
+            "chat_id": full_settings.get("chat_id", ""),
+            "settings_visible": full_settings.get("settings_visible", False)
+        }
+        self.token_entry.delete(0, tk.END)
+        self.token_entry.insert(0, self.settings["telegram_token"])
+        self.chat_id_entry.delete(0, tk.END)
+        self.chat_id_entry.insert(0, self.settings["chat_id"])
+        self.visible = self.settings["settings_visible"]
+        self.apply_settings_visibility()
+        return self.settings
+
+    def save_settings(self):
+        ui_settings = {
+            "telegram_token": self.token_entry.get(),
+            "chat_id": self.chat_id_entry.get(),
+            "settings_visible": self.visible
+        }
+        return ui_settings
+
+    def get_token(self):
+        return self.token_entry.get()
+
+    def get_chat_id(self):
+        return self.chat_id_entry.get()
