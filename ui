@@ -1,0 +1,427 @@
+import json
+import tkinter as tk
+from tkinter import messagebox, ttk
+import threading
+import os
+
+from aiohttp.helpers import TOKEN
+
+from still import monitor, send_telegram_message, check_posts, get_section_id_from_url, load_last_post_id, DEFAULT_SECTION_ID
+from config import load_config, save_config, set_autostart
+
+class LolzteamMonitorUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Lolzteam Forum Monitor")
+        self.root.configure(bg="#1E2124")
+        self.root.resizable(False, False)
+
+        self.monitor_thread = None
+        self.stop_event = threading.Event()
+        self.found_posts = []
+        self.settings_visible = False
+        self.config_visible = False
+
+        # Загрузка конфигурации с обработкой ошибок
+        self.config = load_config()
+        self.root.attributes('-alpha', self.config.get("opacity", 1.0))  # Значение по умолчанию, если opacity отсутствует
+
+        # Языковые настройки
+        self.texts = {
+            "ru": {
+                "title": "Lolzteam Forum Monitor",
+                "telegram_settings": "⚙ Настройки Telegram",
+                "hide_telegram": "⚙ Скрыть настройки",
+                "settings": "⚙ Настройки",
+                "token_label": "Токен Telegram-бота:",
+                "chat_id_label": "Ваш Telegram ID:",
+                "section_label": "Ссылки на разделы:",
+                "keywords_label": "Ключевые слова:",
+                "username_label": "Ники пользователей:",
+                "status_label": "Статус: Ожидание",
+                "start_button": "▶ Запустить",
+                "stop_button": "⏹ Остановить",
+                "posts_label": "Найденные посты",
+                "settings_window": "Настройки",
+                "autostart": "Автозапуск",
+                "opacity": "Прозрачность",
+                "language": "Язык",
+                "lang_ru": "Русский",
+                "lang_en": "Английский",
+                "error_telegram": "Введите токен Telegram-бота и ваш Telegram ID!",
+                "error_keywords": "Введите хотя бы одно ключевое слово или ник пользователя!",
+                "info_running": "Мониторинг уже запущен!",
+                "success_start": "Мониторинг запущен!",
+                "success_stop": "Мониторинг остановлен!",
+                "info_not_running": "Мониторинг не запущен!"
+            },
+            "en": {
+                "title": "Lolzteam Forum Monitor",
+                "telegram_settings": "⚙ Telegram Settings",
+                "hide_telegram": "⚙ Hide Settings",
+                "settings": "⚙ Settings",
+                "token_label": "Telegram Bot Token:",
+                "chat_id_label": "Your Telegram ID:",
+                "section_label": "Section Links:",
+                "keywords_label": "Keywords:",
+                "username_label": "Usernames:",
+                "status_label": "Status: Waiting",
+                "start_button": "▶ Start",
+                "stop_button": "⏹ Stop",
+                "posts_label": "Found Posts",
+                "settings_window": "Settings",
+                "autostart": "Autostart",
+                "opacity": "Opacity",
+                "language": "Language",
+                "lang_ru": "Russian",
+                "lang_en": "English",
+                "error_telegram": "Enter Telegram bot token and your Telegram ID!",
+                "error_keywords": "Enter at least one keyword or username!",
+                "info_running": "Monitoring is already running!",
+                "success_start": "Monitoring started!",
+                "success_stop": "Monitoring stopped!",
+                "info_not_running": "Monitoring is not running!"
+            }
+        }
+        self.lang = self.config.get("language", "ru")  # Значение по умолчанию "ru"
+
+        # Адаптивные размеры окна
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        self.base_width = int(screen_width * 0.4)
+        self.base_height = int(screen_height * 0.6)
+        self.expanded_height = int(self.base_height * 1.2)
+        self.root.geometry(f"{self.base_width}x{self.base_height}")
+
+        # Стили
+        self.root.tk_setPalette(background="#1E2124", foreground="#FFFFFF")
+        label_style = {"bg": "#1E2124", "fg": "#DCDDDE", "font": ("Segoe UI", 11)}
+        entry_style = {"bg": "#36393F", "fg": "#DCDDDE", "insertbackground": "#FFFFFF", "font": ("Segoe UI", 11),
+                      "bd": 0, "relief": "flat", "show": "*"}
+        button_style = {"font": ("Segoe UI", 11, "bold"), "bg": "#5865F2", "fg": "#FFFFFF",
+                       "activebackground": "#4752C4", "bd": 0, "relief": "flat", "cursor": "hand2"}
+        plain_entry_style = {"bg": "#36393F", "fg": "#DCDDDE", "insertbackground": "#FFFFFF",
+                           "font": ("Segoe UI", 11), "bd": 0, "relief": "flat"}
+
+        # Основной контейнер
+        self.main_frame = tk.Frame(root, bg="#1E2124")
+        self.main_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+        # Кнопка настроек в левом верхнем углу
+        self.settings_button = tk.Button(self.main_frame, text=self.texts[self.lang]["settings"],
+                                        command=self.toggle_config, bg="#2F3136", fg="#7289DA",
+                                        font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=5,
+                                        activebackground="#36393F", cursor="hand2")
+        self.settings_button.pack(side="left", anchor="nw")
+
+        # Заголовок
+        self.title_label = tk.Label(self.main_frame, text=self.texts[self.lang]["title"], bg="#1E2124", fg="#7289DA",
+                                   font=("Segoe UI", 16, "bold"))
+        self.title_label.pack(pady=(0, 10))
+
+        # Контейнер для кнопки настроек Telegram
+        self.toggle_frame = tk.Frame(self.main_frame, bg="#1E2124")
+        self.toggle_frame.pack(fill="x")
+        self.toggle_button = tk.Button(self.toggle_frame, text=self.texts[self.lang]["telegram_settings"],
+                                     command=self.toggle_settings, bg="#2F3136", fg="#7289DA",
+                                     font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=5,
+                                     activebackground="#36393F", cursor="hand2")
+        self.toggle_button.pack(side="right", padx=(0, 5))
+
+        # Блок настроек (встроенный)
+        self.config_frame = tk.Frame(self.main_frame, bg="#2F3136", bd=0)
+        self.autostart_var = tk.BooleanVar(value=self.config.get("autostart", False))
+        self.autostart_check = tk.Checkbutton(self.config_frame, text=self.texts[self.lang]["autostart"],
+                                             variable=self.autostart_var, command=self.update_autostart,
+                                             bg="#2F3136", fg="#DCDDDE", selectcolor="#5865F2",
+                                             font=("Segoe UI", 11), relief="flat", activebackground="#36393F")
+        self.opacity_label = tk.Label(self.config_frame, text=self.texts[self.lang]["opacity"], bg="#2F3136", fg="#DCDDDE",
+                                     font=("Segoe UI", 11))
+        self.opacity_scale = tk.Scale(self.config_frame, from_=0.3, to=1.0, resolution=0.1, orient="horizontal",
+                                     command=self.update_opacity, bg="#2F3136", fg="#DCDDDE", troughcolor="#36393F",
+                                     highlightthickness=0, length=150)
+        self.opacity_scale.set(self.config.get("opacity", 1.0))
+        self.lang_label = tk.Label(self.config_frame, text=self.texts[self.lang]["language"], bg="#2F3136", fg="#DCDDDE",
+                                  font=("Segoe UI", 11))
+        self.lang_var = tk.StringVar(value=self.lang)
+        self.lang_menu = ttk.OptionMenu(self.config_frame, self.lang_var, self.lang, "ru", "en",
+                                       command=self.update_language)
+        self.lang_menu.config(width=10)
+
+        # Сворачиваемый блок настроек Telegram
+        self.settings_frame = tk.Frame(self.main_frame, bg="#2F3136", bd=0)
+        self.token_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["token_label"], **label_style)
+        self.token_entry = tk.Entry(self.settings_frame, width=50, **entry_style)
+        self.chat_id_label = tk.Label(self.settings_frame, text=self.texts[self.lang]["chat_id_label"], **label_style)
+        self.chat_id_entry = tk.Entry(self.settings_frame, width=50, **entry_style)
+
+        # Основные настройки мониторинга
+        self.monitor_frame = tk.Frame(self.main_frame, bg="#1E2124")
+        self.monitor_frame.pack(fill="x")
+
+        self.section_label = tk.Label(self.monitor_frame, text=self.texts[self.lang]["section_label"], **label_style)
+        self.section_label.pack(anchor="w", pady=(0, 2))
+        self.section_entry = tk.Entry(self.monitor_frame, width=50, **plain_entry_style)
+        self.section_entry.pack(pady=(0, 5), fill="x")
+
+        self.keywords_label = tk.Label(self.monitor_frame, text=self.texts[self.lang]["keywords_label"], **label_style)
+        self.keywords_label.pack(anchor="w", pady=(0, 2))
+        self.keywords_entry = tk.Entry(self.monitor_frame, width=50, **plain_entry_style)
+        self.keywords_entry.pack(pady=(0, 5), fill="x")
+
+        self.username_label = tk.Label(self.monitor_frame, text=self.texts[self.lang]["username_label"], **label_style)
+        self.username_label.pack(anchor="w", pady=(0, 2))
+        self.username_entry = tk.Entry(self.monitor_frame, width=50, **plain_entry_style)
+        self.username_entry.pack(pady=(0, 5), fill="x")
+
+        # Статус и кнопки
+        self.control_frame = tk.Frame(self.main_frame, bg="#1E2124")
+        self.control_frame.pack(fill="x", pady=5)
+        self.status_label = tk.Label(self.control_frame, text=self.texts[self.lang]["status_label"], bg="#1E2124", fg="#99AAB5",
+                                   font=("Segoe UI", 10, "italic"))
+        self.status_label.pack(side="left", padx=(0, 10))
+
+        self.button_frame = tk.Frame(self.control_frame, bg="#1E2124")
+        self.button_frame.pack(side="right")
+        self.start_button = tk.Button(self.button_frame, text=self.texts[self.lang]["start_button"], command=self.start_monitoring,
+                                    width=12, padx=10, pady=5, **button_style)
+        self.start_button.pack(side="left", padx=5)
+        self.stop_button = tk.Button(self.button_frame, text=self.texts[self.lang]["stop_button"], command=self.stop_monitoring,
+                                   width=12, padx=10, pady=5, **button_style)
+        self.stop_button.pack(side="left", padx=5)
+        self.stop_button.config(state="disabled")
+
+        # Список постов
+        self.posts_frame = tk.Frame(self.main_frame, bg="#1E2124")
+        self.posts_frame.pack(fill="both", expand=True, pady=(5, 0))
+        self.posts_label = tk.Label(self.posts_frame, text=self.texts[self.lang]["posts_label"], bg="#1E2124", fg="#7289DA",
+                                   font=("Segoe UI", 10, "bold"))
+        self.posts_label.pack(anchor="w")
+        self.posts_listbox = tk.Listbox(self.posts_frame, bg="#2F3136", fg="#DCDDDE", font=("Segoe UI", 10),
+                                      height=10, selectbackground="#5865F2", bd=0, highlightthickness=0)
+        self.posts_listbox.pack(fill="both", expand=True, padx=5, pady=5)
+        self.scrollbar = ttk.Scrollbar(self.posts_listbox, orient="vertical")
+        self.posts_listbox.config(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.config(command=self.posts_listbox.yview)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Иконка
+        self.set_icon()
+
+        # Загрузка настроек после полной отрисовки
+        self.root.update()
+        self.load_settings()
+        self.root.after(200, self.animate_status)
+
+    def set_icon(self):
+        icon = tk.Canvas(self.root, width=32, height=32, bg="#1E2124", highlightthickness=0)
+        icon.create_rectangle(0, 0, 32, 32, fill="#5865F2")
+        icon.create_text(16, 16, text="Lolz", font=("Segoe UI", 14, "bold"), fill="#FFFFFF")
+        photo = tk.PhotoImage(master=icon, width=32, height=32)
+        icon.image = photo
+        self.root.iconphoto(True, photo)
+
+    def toggle_settings(self):
+        self.settings_visible = not self.settings_visible
+        if self.config_visible:
+            self.toggle_config()  # Скрываем настройки, если открыты
+        self.apply_settings_visibility()
+
+    def toggle_config(self):
+        self.config_visible = not self.config_visible
+        if self.settings_visible:
+            self.toggle_settings()  # Скрываем Telegram, если открыт
+        self.apply_config_visibility()
+
+    def apply_settings_visibility(self):
+        self.root.update_idletasks()
+        if self.settings_visible:
+            self.settings_frame.pack(fill="x", pady=(5, 10), padx=10, before=self.monitor_frame)
+            self.token_label.pack(anchor="w", pady=(5, 2), padx=10)
+            self.token_entry.pack(pady=(0, 5), padx=10, fill="x")
+            self.chat_id_label.pack(anchor="w", pady=(5, 2), padx=10)
+            self.chat_id_entry.pack(pady=(0, 5), padx=10, fill="x")
+            self.toggle_button.config(text=self.texts[self.lang]["hide_telegram"], fg="#FF5555")
+            self.root.geometry(f"{self.base_width}x{self.expanded_height}")
+        else:
+            for widget in self.settings_frame.winfo_children():
+                widget.pack_forget()
+            self.settings_frame.pack_forget()
+            self.toggle_button.config(text=self.texts[self.lang]["telegram_settings"], fg="#7289DA")
+            if not self.config_visible:
+                self.root.geometry(f"{self.base_width}x{self.base_height}")
+
+    def apply_config_visibility(self):
+        self.root.update_idletasks()
+        if self.config_visible:
+            self.config_frame.pack(fill="x", pady=(5, 10), padx=10, anchor="nw", before=self.toggle_frame)
+            self.autostart_check.pack(anchor="w", pady=5, padx=10)
+            self.opacity_label.pack(anchor="w", pady=(5, 0), padx=10)
+            self.opacity_scale.pack(anchor="w", padx=10)
+            self.lang_label.pack(anchor="w", pady=(5, 0), padx=10)
+            self.lang_menu.pack(anchor="w", padx=10)
+            self.settings_button.config(text="✕ Закрыть" if self.lang == "ru" else "✕ Close", fg="#FF5555")
+            self.root.geometry(f"{self.base_width}x{self.expanded_height}")
+        else:
+            for widget in self.config_frame.winfo_children():
+                widget.pack_forget()
+            self.config_frame.pack_forget()
+            self.settings_button.config(text=self.texts[self.lang]["settings"], fg="#7289DA")
+            if not self.settings_visible:
+                self.root.geometry(f"{self.base_width}x{self.base_height}")
+
+    def update_autostart(self):
+        self.config["autostart"] = self.autostart_var.get()
+        set_autostart(self.config["autostart"])
+        save_config(self.config)
+
+    def update_opacity(self, value):
+        self.config["opacity"] = float(value)
+        self.root.attributes('-alpha', self.config["opacity"])
+        save_config(self.config)
+
+    def update_language(self, value):
+        self.config["language"] = value
+        self.lang = value
+        save_config(self.config)
+        self.update_texts()
+
+    def update_texts(self):
+        self.root.title(self.texts[self.lang]["title"])
+        self.settings_button.config(text=self.texts[self.lang]["settings"] if not self.config_visible
+                                   else "✕ Закрыть" if self.lang == "ru" else "✕ Close")
+        self.toggle_button.config(text=self.texts[self.lang]["telegram_settings"] if not self.settings_visible
+                                 else self.texts[self.lang]["hide_telegram"])
+        self.token_label.config(text=self.texts[self.lang]["token_label"])
+        self.chat_id_label.config(text=self.texts[self.lang]["chat_id_label"])
+        self.section_label.config(text=self.texts[self.lang]["section_label"])
+        self.keywords_label.config(text=self.texts[self.lang]["keywords_label"])
+        self.username_label.config(text=self.texts[self.lang]["username_label"])
+        self.status_label.config(text=self.texts[self.lang]["status_label"] if "Ожидание" in self.status_label.cget("text")
+                                or "Waiting" in self.status_label.cget("text") else self.status_label.cget("text"))
+        self.start_button.config(text=self.texts[self.lang]["start_button"])
+        self.stop_button.config(text=self.texts[self.lang]["stop_button"])
+        self.posts_label.config(text=self.texts[self.lang]["posts_label"])
+        self.autostart_check.config(text=self.texts[self.lang]["autostart"])
+        self.opacity_label.config(text=self.texts[self.lang]["opacity"])
+        self.lang_label.config(text=self.texts[self.lang]["language"])
+        self.lang_menu["menu"].delete(0, "end")
+        self.lang_menu["menu"].add_command(label=self.texts[self.lang]["lang_ru"], command=lambda: self.update_language("ru"))
+        self.lang_menu["menu"].add_command(label=self.texts[self.lang]["lang_en"], command=lambda: self.update_language("en"))
+
+    def animate_status(self):
+        text = self.status_label.cget("text").lower()
+        if "запущен" in text or "started" in text:
+            current_color = self.status_label.cget("fg")
+            colors = ["#43B581", "#99AAB5", "#43B581", "#FFFFFF"]
+            next_color = colors[(colors.index(current_color) + 1) % len(colors)]
+            self.status_label.config(fg=next_color)
+        elif "остановлен" in text or "stopped" in text:
+            self.status_label.config(fg="#F04747")
+        else:
+            self.status_label.config(fg="#99AAB5")
+        self.root.after(300, self.animate_status)
+
+    def start_monitoring(self):
+        if not self.token_entry.get().strip() or not self.chat_id_entry.get().strip():
+            messagebox.showerror("Ошибка" if self.lang == "ru" else "Error!",
+                                self.texts[self.lang]["error_telegram"])
+            return
+        if not self.keywords_entry.get().strip() and not self.username_entry.get().strip():
+            messagebox.showerror("Ошибка" if self.lang == "ru" else "Error!",
+                                self.texts[self.lang]["error_keywords"])
+            return
+
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            messagebox.showinfo("Информация" if self.lang == "ru" else "Info!",
+                               self.texts[self.lang]["info_running"])
+            return
+
+        self.stop_event.clear()
+        self.monitor_thread = threading.Thread(
+            target=monitor,
+            args=(self.section_entry.get(), TOKEN, self.token_entry.get(), self.chat_id_entry.get(),
+                  self.keywords_entry.get(), self.username_entry.get(), self.stop_event, 24),
+            daemon=True
+        )
+        self.monitor_thread.start()
+
+        self.status_label.config(text="Статус: Мониторинг запущен" if self.lang == "ru" else "Status: Monitoring started")
+        self.start_button.config(state="disabled")
+        self.stop_button.config(state="normal")
+        self.save_settings()
+        messagebox.showinfo("Успех" if self.lang == "ru" else "Success!",
+                           self.texts[self.lang]["success_start"])
+
+        self.update_posts_thread = threading.Thread(target=self.update_posts, daemon=True)
+        self.update_posts_thread.start()
+
+    def update_posts(self):
+        import time
+        while not self.stop_event.is_set():
+            section_url = self.section_entry.get()
+            section_id = get_section_id_from_url(section_url) if section_url else DEFAULT_SECTION_ID
+            keywords = self.keywords_entry.get() if self.keywords_entry.get().strip() else None
+            usernames = self.username_entry.get() if self.username_entry.get().strip() else None
+            last_post_id = load_last_post_id(section_id)
+
+            new_posts, _ = check_posts(section_id, TOKEN, keywords, usernames, last_post_id)
+            for post in new_posts:
+                entry = f"{post['username']} - {post['title']} - {post['link']}"
+                if entry not in self.found_posts:
+                    self.posts_listbox.insert(tk.END, entry)
+                    self.found_posts.append(entry)
+            time.sleep(5)
+
+    def stop_monitoring(self):
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.stop_event.set()
+            self.monitor_thread.join(timeout=2)
+            self.status_label.config(text="Статус: Остановлен" if self.lang == "ru" else "Status: Stopped")
+            self.start_button.config(state="normal")
+            self.stop_button.config(state="disabled")
+            messagebox.showinfo("Успех" if self.lang == "ru" else "Success!",
+                               self.texts[self.lang]["success_stop"])
+        else:
+            messagebox.showinfo("Информация" if self.lang == "ru" else "Info!",
+                               self.texts[self.lang]["info_not_running"])
+
+    def save_settings(self):
+        settings = {
+            "section_urls": self.section_entry.get(),
+            "keywords": self.keywords_entry.get(),
+            "usernames": self.username_entry.get(),
+            "telegram_token": self.token_entry.get(),
+            "chat_id": self.chat_id_entry.get(),
+            "settings_visible": self.settings_visible
+        }
+        try:
+            with open("settings.json", "w") as f:
+                json.dump(settings, f)
+        except Exception as e:
+            print(f"Ошибка сохранения settings.json: {e}")
+
+    def load_settings(self):
+        if os.path.exists("settings.json"):
+            try:
+                with open("settings.json", "r") as f:
+                    data = f.read().strip()
+                    if data:  # Проверяем, что файл не пустой
+                        settings = json.loads(data)
+                        self.section_entry.insert(0, settings.get("section_urls", ""))
+                        self.keywords_entry.insert(0, settings.get("keywords", ""))
+                        self.username_entry.insert(0, settings.get("usernames", ""))
+                        self.token_entry.insert(0, settings.get("telegram_token", ""))
+                        self.chat_id_entry.insert(0, settings.get("chat_id", ""))
+                        self.settings_visible = settings.get("settings_visible", False)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Ошибка загрузки settings.json: {e}. Используются пустые настройки.")
+        self.apply_settings_visibility()
+
+    def run(self):
+        self.root.mainloop()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = LolzteamMonitorUI(root)
+    app.run()
