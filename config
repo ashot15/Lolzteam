@@ -4,32 +4,57 @@ import json
 
 DEFAULT_CONFIG = {
     "autostart": False,
-    "opacity": 1.0,  # Прозрачность от 0.0 до 1.0
-    "language": "ru"  # "ru" или "en"
+    "opacity": 1.0,
+    "language": "ru"
 }
 
 def load_config():
-    if os.path.exists("config.json"):
+    settings_file = "settings.json"
+    if os.path.exists(settings_file):
         try:
-            with open("config.json", "r") as f:
+            with open(settings_file, "r") as f:
                 data = f.read().strip()
-                if not data:  # Если файл пустой
+                if not data:
                     return DEFAULT_CONFIG
-                return json.loads(data)
+                full_settings = json.loads(data)
+                # Возвращаем только часть настроек, относящуюся к config
+                return {
+                    "autostart": full_settings.get("autostart", DEFAULT_CONFIG["autostart"]),
+                    "opacity": full_settings.get("opacity", DEFAULT_CONFIG["opacity"]),
+                    "language": full_settings.get("language", DEFAULT_CONFIG["language"])
+                }
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Ошибка загрузки config.json: {e}. Используются настройки по умолчанию.")
+            print(f"Ошибка загрузки config из settings.json: {e}. Используются настройки по умолчанию.")
             return DEFAULT_CONFIG
     return DEFAULT_CONFIG
 
 def save_config(config):
-    with open("config.json", "w") as f:
-        json.dump(config, f)
+    settings_file = "settings.json"
+    full_settings = load_full_settings()  # Загружаем текущие настройки
+    full_settings.update(config)  # Обновляем только часть config
+    try:
+        with open(settings_file, "w") as f:
+            json.dump(full_settings, f)
+    except Exception as e:
+        print(f"Ошибка сохранения config в settings.json: {e}")
+
+def load_full_settings():
+    settings_file = "settings.json"
+    if os.path.exists(settings_file):
+        try:
+            with open(settings_file, "r") as f:
+                data = f.read().strip()
+                if data:
+                    return json.loads(data)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
 
 def set_autostart(enable):
     import winreg
     key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     app_name = "LolzteamMonitor"
-    exe_path = os.path.abspath(__file__).replace("config.py", "ui.py")  # Путь к ui.py
+    exe_path = os.path.abspath(__file__).replace("config.py", "ui.py")
 
     try:
         reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_ALL_ACCESS)
@@ -39,7 +64,7 @@ def set_autostart(enable):
             try:
                 winreg.DeleteValue(reg_key, app_name)
             except FileNotFoundError:
-                pass  # Если значение уже удалено, ничего не делаем
+                pass
         winreg.CloseKey(reg_key)
     except Exception as e:
         print(f"Ошибка настройки автозапуска: {e}")
